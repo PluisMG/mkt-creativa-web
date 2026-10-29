@@ -1,1 +1,59 @@
-# mkt-creativa-web
+# AVRA 360
+
+Pantalla conversacional de vista previa. El sitio público es `/`, `/aviso-de-privacidad` y el 404. El chat habla con **AVRA**, un agente de Grok Bot. Las instrucciones de AVRA viven en su perfil: este repositorio no trae prompt de sistema ni personalidad.
+
+No despliega, no toca DNS y no publica. El paquete para subir con la API de Cloudflare queda en el Agent Store: `worker.mjs`, `worker-config.json` y `dist.tar.gz` (compilado con `PREVIEW=1`).
+
+## Desarrollo
+
+```bash
+npm run build
+npm test
+npm run test:e2e
+npm run preview
+```
+
+`npm run build` deja el cliente en `public/chat.js` y el sitio en `dist/`. Inter se autoaloja en woff2, subset latino, con `font-display: swap`. No hay Google Fonts en tiempo de ejecución.
+
+## Chat
+
+`POST /api/chat` responde `{ status: "configurando" }` con 503 salvo que se cumplan todas estas condiciones:
+
+| Nombre | Dónde | Valor para encender el chat |
+| --- | --- | --- |
+| `CHAT_ACTIVO` | variable | exactamente `"1"` |
+| `PUBLIC_TURNSTILE_SITE_KEY` | variable | site key pública de Turnstile |
+| `AVRA_WEBHOOK_URL` | secret | URL `https` del webhook de routine |
+| `AVRA_WEBHOOK_KEY` | secret | la misma llave en `Authorization: Bearer` y `X-Automation-Key` |
+| `AVRA_REPLY_SIGNING_SECRET` | secret | HMAC del `replyToken` |
+| `TURNSTILE_SECRET_KEY` | secret | secret de Siteverify |
+
+El webhook es un POST, cuerpo JSON, timeout de 8 segundos y un solo intento. Responde 200 cuando AVRA despierta y no trae la respuesta. AVRA devuelve `{ replyToken, text }` a `POST /api/chat/reply`. El visitante la recibe en `GET /api/chat/:conversationId/events`, con sondeo cada 2 segundos y backoff. A los 3 minutos la interfaz dice: «AVRA está tardando más de lo normal».
+
+La conversación vive en el Durable Object `Conversation` solo para retransmitir. Una alarma la borra a las 24 horas. La IP no se guarda: `RateLimiter` usa su hash (10 mensajes cada 10 minutos y 40 al día).
+
+Mientras falte algo de la tabla, la caja sigue visible y dice: «El chat con AVRA está en configuración. Muy pronto podrás conversar aquí.» No se simula una respuesta.
+
+## Almacenamiento, apagado
+
+`LeadStore` y `ConversationArchive` tienen adaptadores para D1 y KV. Ninguno está enlazado en `wrangler.jsonc`. `ALMACENAMIENTO_ACTIVO` y `AVISO_APROBADO` solo se encienden con `"1"`. Sin aviso aprobado y sin consentimiento no se persiste nada más allá de la retransmisión. La versión del borrador es `aviso-borrador-2026-10-29`.
+
+Para activarlo más adelante:
+
+1. Sustituir este borrador por el aviso definitivo, sin corchetes, y publicar esa página.
+2. Poner `AVISO_APROBADO` en `"1"`.
+3. Enlazar D1 o KV y crear las tablas o las claves que esperan `AdaptadorD1` y `AdaptadorKv` en `worker/almacenamiento.ts`.
+4. Pedir consentimiento expreso ligado a la versión del aviso.
+5. Solo entonces poner `ALMACENAMIENTO_ACTIVO` en `"1"`.
+
+Hoy `POST /api/chat` llama al archivo con consentimiento en falso, así que no escribe.
+
+## Calendario
+
+Este Worker no integra Google Calendar ni guarda credenciales de calendario. Si una conversación necesita una cita, la agenda la hace AVRA desde su perfil.
+
+## Vista previa
+
+Con `PREVIEW=1` (es el valor de `wrangler.jsonc` y del `dist.tar.gz`) todas las respuestas llevan `X-Robots-Tag: noindex, nofollow` y `robots.txt` responde `Disallow: /`. `/aviso-de-privacidad` también lleva `noindex` en el HTML. Los encabezados de seguridad, incluida la CSP y HSTS, salen del Worker también en los 301 y en el 404.
+
+No hay analítica ni cookies de terceros. El único dato en el navegador es `avra360.conversationId` en `localStorage`, y solo después de un chat activo. El aviso de privacidad lo dice.
